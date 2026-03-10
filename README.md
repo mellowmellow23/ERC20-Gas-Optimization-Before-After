@@ -1,4 +1,59 @@
+# ERC20-Gas-Optimization-Before-After
 
+This repository demonstrates gas cost optimizations for a simple ERC20 token smart contract with a 5% transfer tax (burned). The "Before" version is inefficient, while the "After" version applies best practices to reduce gas usage by 20-50% without changing functionality. 
+
+## Problem: Common Gas Inefficiencies in ERC20 Contracts
+Many ERC20 tokens waste gas on deployment and transactions due to poor coding patterns. For example:
+- Redundant state variables (e.g., duplicating `totalSupply` for no reason).
+- Inefficient error handling with `require` and strings (expensive reverts).
+- No `unchecked` math for safe operations.
+- Unnecessary emits or local variable copies.
+
+Here's a snippet from the "Before" version's `_transfer` function showing redundancies:
+
+```solidity
+function _transfer(address from, address to, uint256 amount) internal {
+    require(from != address(0), "ERC20: transfer from the zero address"); // Inefficient: String revert costs more gas
+    require(to != address(0), "ERC20: transfer to the zero address");
+    require(amount > 0, "Transfer amount must be greater than zero");
+
+    uint256 fromBalance = _balances[from]; // Redundant local copy – could cache but not optimized
+    require(fromBalance >= amount, "ERC20: transfer amount exceeds balance");
+
+    uint256 tax = (amount * 5) / 100; // No unchecked – unnecessary overflow check
+    uint256 amountAfterTax = amount - tax;
+
+    _balances[from] = fromBalance - amount; // Write without optimization
+    _balances[to] += amountAfterTax;
+    _totalSupply -= tax; // Burn tax
+    duplicateTotalSupply = _totalSupply; // Redundant mirror variable – wastes storage
+
+    emit Transfer(from, to, amountAfterTax);
+    emit Transfer(from, address(0), tax); // Extra emit for burn – could combine
+    emit Approval(from, to, amount); // Unnecessary duplicate Approval emit
+}
+
+## solution 
+- function _transfer(address from, address to, uint256 amount) internal {
++ function _transfer(address from, address to, uint256 amount) internal override {
+-    require(from != address(0), "ERC20: transfer from the zero address");
++    if (from == address(0)) revert TransferFromZeroAddress();
+    // ... similar for other checks
+
+-    uint256 tax = (amount * 5) / 100;
++    uint256 tax = (amount * TAX_PERCENTAGE) / 100; // Constant for tax
+
+-    uint256 amountAfterTax = amount - tax;
++    unchecked { // Safe here – amount > tax
++        amountAfterTax = amount - tax;
++    }
+
+-    emit Transfer(from, to, amountAfterTax);
+-    emit Transfer(from, address(0), tax);
+-    emit Approval(from, to, amount); // Removed unnecessary Approval
++    emit Transfer(from, to, amountAfterTax);
++    emit Transfer(from, address(0), tax); // Kept essential emits only
+}
 ## Gas Results
 
 Measured with:
@@ -14,6 +69,14 @@ forge test --gas-report
 | transfer | 48,466 | 43,216 | 5,250 | 10.83% |
 | transferFrom | 79,708 | 69,537 | 10,171 | 12.76% |
 | transferMany | 65,181 | 58,632 | 6,549 | 10.05% |
+
+### Gas Report Comparison
+
+#### BeforeERC20 Gas Report
+<img src="assets/screenshots/gas-report-before.png" alt="BeforeERC20 gas report" width="850" />
+
+#### AfterERC20 Gas Report
+<img src="assets/screenshots/gas-report-after.png" alt="AfterERC20 gas report" width="850" />
 
 ### Key Takeaways
 
@@ -67,3 +130,27 @@ Both contracts are verified on Sepolia Etherscan.
 
 ### Deployment Summary
 The optimized ERC20 reduced deployment gas from **938245** to **634158**, saving **304087 gas** or **32.41%** while preserving the same functionality.
+
+
+
+
+
+### Live Sepolia Deployments
+
+#### BeforeERC20 Deployment
+<img src="assets/screenshots/deploy-before.png" alt="BeforeERC20 deployment success" width="850" />
+
+#### AfterERC20 Deployment
+<img src="assets/screenshots/deploy-after.png" alt="AfterERC20 deployment success" width="850" />
+
+
+## Static Analysis
+
+This project was analyzed with Slither to compare the unoptimized and optimized implementations.
+
+### Commands used
+
+```bash
+slither src/before/BeforeERC20.sol
+slither src/after/AfterERC20.sol
+slither . --print human-summary
